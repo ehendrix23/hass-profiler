@@ -2,12 +2,9 @@
 
 Version 0.3.1 executes its own bounded telemetry and allocation capture inside Home Assistant Core. It does not use Pyscript, an App, a remote socket, privileged process access, additional REST queries or HA sensor dependencies. It requires Linux procfs and Home Assistant 2026.11 or newer. The two internal threads are owned by the config entry; unload and shutdown stop scheduling, cooperatively cancel any owned capture and join both threads before cleanup.
 
-### Migration from the App
+### Installation
 
-1. Install the native integration through Marketplace with automatic profiling disabled. Keep the legacy installation available for rollback.
-2. Stop the old App after any in-flight capture has completed. Verify the native status and a real manual memory capture. Never run competing tracemalloc sessions.
-3. Enable automatic profiling in integration options. Verify a real growth-triggered profile, its saved report, and the incident linkage before retiring the App and its Pyscript companion.
-4. The legacy reports in `/share/Logs/memory-watch/` remain separate from native reports under `/share/Logs/hass-profiler/`.
+Install HASS Profiler through Marketplace as an integration and configure it in Devices & Services. It is self-contained; no separate collector, companion script, or legacy diagnostic directory is required. Native reports are stored under `/share/Logs/hass-profiler/` on HAOS. Never run competing tracemalloc sessions.
 
 ### Measurement and safeguards
 
