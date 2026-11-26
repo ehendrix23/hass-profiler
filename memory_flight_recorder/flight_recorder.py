@@ -1,4 +1,4 @@
-"""HAOS memory flight recorder, offline POC / protected telemetry-only candidate.
+"""HAOS memory flight recorder and incident detector.
 
 Never invokes HA services, enumerates heap objects, or attaches to Core.
 All times are UTC epoch seconds. Memory values are MiB.
@@ -146,7 +146,8 @@ class Detector:
         event={'type':kind,'ts':ts,'reasons':sorted(reasons)}
         self.events=(self.events+[event])[-64:]
         self.notify(event)
-        # POC deliberately has no automatic in-process profiler hook.
+        # The WebSocket adapter evaluates this detector's accepted sample and
+        # flags before dispatching the bounded in-Core service separately.
 
     def arm(self, now):
         if self.last_seen_wall is None: self.last_seen_wall=now

@@ -1,8 +1,9 @@
-"""Filtered Home Assistant WebSocket telemetry adapter. No HA writes/services.
+"""Filtered Home Assistant WebSocket telemetry and bounded profile dispatch.
 
 Uses the existing Glances snapshot timestamp. Unchanged state values are
 carried forward explicitly; independent System Monitor available RAM is
-never treated as synchronized to Glances. No automatic profiler is enabled.
+never treated as synchronized to Glances. Actual allocation profiling is
+performed by the separately installed in-Core companion service.
 """
 from __future__ import annotations
 import asyncio
@@ -14,6 +15,7 @@ import os
 from pathlib import Path
 import time
 from flight_recorder import Detector,Journal,Sample,STALE
+from profile_control import ProfileController
 
 LOG=logging.getLogger('memory_watch')
 STAMP='sensor.haos_glances_snapshot_timestamp'
@@ -96,16 +98,17 @@ class EntityFeed:
 
 class Heartbeat:
     """Atomic, bounded local health report. Never polls HA or stores raw events."""
-    def __init__(self, directory, interval=60):
+    def __init__(self, directory, interval=60, profiler=None):
         self.directory=Path(directory)
         self.interval=interval
+        self.profiler=profiler
         self.last_mono=None
     def publish(self, detector, connected, now, monotonic, force=False):
         if not force and self.last_mono is not None and monotonic-self.last_mono<self.interval:
             return False
         sample=detector.ring[-1] if detector.ring else None
         age=now-detector.last_ts if detector.last_ts is not None else None
-        record={"version":"0.1.1","ts":now,"connected":bool(connected),
+        record={"version":"0.2.0","ts":now,"connected":bool(connected),
                 "source_ts":detector.last_ts,"source_age_s":round(age,1) if age is not None else None,
                 "source_fresh":bool(age is not None and -5<=age<=STALE and not detector.gap),
                 "core_mib":sample.core if sample else None,
@@ -114,7 +117,9 @@ class Heartbeat:
                 "carried_fields":list(sample.carried_fields) if sample else [],
                 "recording":detector.journal.active is not None,
                 "flags":sorted(detector.flags),"buffer_samples":len(detector.ring),
-                "telemetry_gap":detector.gap,"profiling":"disabled"}
+                "telemetry_gap":detector.gap,
+                "profiling":"automatic" if self.profiler is not None and self.profiler.storage_ok else "disabled",
+                "profile_last":self.profiler.last if self.profiler is not None else None}
         # Only one writer; do not follow links or leave partial status files.
         fd=None;temp=self.directory/".status.tmp";target=self.directory/"status.json"
         try:
@@ -132,7 +137,7 @@ class Heartbeat:
             return False
         return True
 
-async def session(url,token,detector,heartbeat=None):
+async def session(url,token,detector,heartbeat=None,profiler=None):
     from websockets.asyncio.client import connect
     async with connect(url,open_timeout=5,close_timeout=2,ping_interval=20,ping_timeout=5,max_size=262144,max_queue=8,compression=None) as ws:
         async def receive(timeout=5): return json.loads(await asyncio.wait_for(ws.recv(),timeout))
@@ -153,7 +158,10 @@ async def session(url,token,detector,heartbeat=None):
                 event=message.get('event')
                 if isinstance(event,dict): feed.update(event,time.monotonic())
             s=feed.pop(time.monotonic())
-            if s: detector.feed(s,time.time())
+            if s:
+                observed=time.time()
+                if detector.feed(s,observed) and profiler is not None:
+                    profiler.consider(s,detector.flags,observed)
             detector.check_gap(time.time())
             if heartbeat: heartbeat.publish(detector,True,time.time(),time.monotonic())
 
@@ -163,12 +171,19 @@ async def main():
     j=Journal(Path('/share/Logs/memory-watch'))
     def notice(event): LOG.warning('memory-watch %s',json.dumps(event,separators=(',',':')))
     detector=Detector(j,notice);detector.arm(time.time())
-    heartbeat=Heartbeat(j.directory)
+    with open('/data/options.json',encoding='utf-8') as file:
+        options=json.load(file)
+    enabled=options.get('automatic_memory_profiling',True)
+    seconds=options.get('profile_seconds',15)
+    if type(enabled) is not bool or type(seconds) is not int or not 5<=seconds<=60:
+        raise ValueError('invalid profiling options')
+    profiler=ProfileController(url,token,detector,seconds) if enabled else None
+    heartbeat=Heartbeat(j.directory,profiler=profiler)
     delay=2
     while True:
         connection_started=time.monotonic()
         try:
-            await session(url,token,detector,heartbeat)
+            await session(url,token,detector,heartbeat,profiler)
         except (OSError,RuntimeError,ValueError,asyncio.TimeoutError) as exc:
             # Never log the exception text, URL headers, auth token, or HA payloads.
             LOG.warning('telemetry disconnected: %s',type(exc).__name__)

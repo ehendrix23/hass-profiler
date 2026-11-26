@@ -1,7 +1,7 @@
-name: Memory Flight Recorder (POC)
-version: '0.1.1'
+name: Memory Flight Recorder
+version: '0.2.0'
 slug: memory_flight_recorder
-description: Protected telemetry-only proof of concept; no automatic profiling.
+description: Protected memory flight recorder with automatic in-Core allocation profiling via its companion service.
 arch:
   - amd64
 startup: application
@@ -11,5 +11,9 @@ homeassistant_api: true
 map:
   - type: share
     read_only: false
-options: {}
-schema: {}
+options:
+  automatic_memory_profiling: true
+  profile_seconds: 15
+schema:
+  automatic_memory_profiling: bool
+  profile_seconds: int(5,60)

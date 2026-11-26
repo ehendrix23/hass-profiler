@@ -1,3 +1,3 @@
-# Memory Flight Recorder (POC)
+# Memory Flight Recorder
 
-Protected HAOS telemetry collector. Version 0.1.1 consumes existing resource sensors and stores a 30-minute rolling history in memory. Abnormal growth opens a bounded diagnostic journal outside the HA configuration repository. See DOCS.md for prerequisites and limitations. Internal heap and stack profiling are not included in this release.
+Protected HAOS flight recorder. Version 0.2.0 consumes existing resource sensors and automatically requests actual bounded allocation tracing within Home Assistant Core through the separately installed Pyscript companion. See DOCS.md for installation, headroom guards, manual profiling, automatic triggering and attribution limits.

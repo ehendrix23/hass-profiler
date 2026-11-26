@@ -6,13 +6,15 @@ Home Assistant OS App repository for a lightweight memory flight recorder and ex
 
 ## Installable release
 
-Memory Flight Recorder 0.1.1 is a protected, telemetry-only App. It uses a filtered Home Assistant WebSocket subscription and the existing 15-second Glances snapshot timestamp. It does not perform heap scans, issue service calls, or attach to Core. The current implementation expects the entity IDs documented in `memory_flight_recorder/ha_feed.py`; it is not yet a generic out-of-the-box profiler for arbitrary HA installations.
+Memory Flight Recorder 0.2.0 is a protected App that uses existing 15-second resource telemetry to trigger actual Python allocation tracing inside Core through its Pyscript companion. The current implementation expects the entity IDs documented in `memory_flight_recorder/ha_feed.py`; it is not yet a generic out-of-the-box profiler for arbitrary HA installations.
+
+Install `core_companion/hass_profiler.py` into `/config/pyscript/` on a working Pyscript installation with `allow_all_imports` enabled. Verify the `pyscript.hass_profiler_memory` action is present before enabling automatic profiling. The companion runs in Core's native executor, owns a bounded tracemalloc session, and writes sanitized allocation rankings under `/share/Logs/memory-watch/`. The App invokes that action only when the memory detector qualifies and headroom is sufficient. It verifies the persisted report before claiming a successful profile. Manual profiling is available through the same action (5–60 seconds; `include_census` optionally measures existing GC-tracked integration-defined objects).
 
 Install using Settings > Apps > Install app > Repositories. Add the repository URL. Leave Protection mode on. For a migration from a locally installed recorder, install the repository-sourced App without starting it, stop the local App and turn off its boot/watchdog, then start and validate the new App before enabling boot/watchdog. Both versions use the same share directory; never run them concurrently. Retain the stopped local App until the new version is accepted. Roll back by stopping/disabling the new App before starting the local App again. Do not delete the diagnostic directory.
 
 ## Updates
 
-Commit tested source changes and bump `memory_flight_recorder/config.yaml` and the health-status version in `ha_feed.py` together. Update CHANGELOG.md. The Supervisor builds from Dockerfile; no container registry is needed. Keep automatic updates disabled during development. No tokens, credentials, live configuration, or real incident recordings belong in this repository.
+Commit tested source changes and bump `memory_flight_recorder/config.yaml`, the health-status version in `ha_feed.py`, and the companion version as applicable. Update CHANGELOG.md. The Supervisor builds from Dockerfile; no container registry is needed. The companion is intentionally installed separately: the protected App has no write access to Core's configuration. Update and verify it before an App release that depends on a changed companion contract. Keep automatic updates disabled during development. No tokens, credentials, live configuration, or real incident recordings belong in this repository.
 
 ## Experiments
 
