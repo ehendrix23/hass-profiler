@@ -16,21 +16,23 @@ from . import profiler
 from .telemetry import LinuxSampler
 
 LOG = logging.getLogger(__name__)
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 GROWTH_FLAGS = {"rapid_60s", "rapid_5min", "rising_high_core"}
 REPORT_NAME = re.compile(r"core-profile-[0-9]{1,24}\.json")
 RATE_WINDOW = 300
 MAX_ATTEMPTS = 3
 CONTROL_CAP = 16384
 INTERVAL = 15
+HOUSEKEEP_INTERVAL = 86400
+HOUSEKEEP_RETRY = 60
 
 
 @dataclass(frozen=True, slots=True)
 class Settings:
     automatic_memory_profiling: bool = True
     profile_seconds: int = 15
-    rapid_mib: int = 100
-    rapid_5min_mib: int = 200
+    rapid_mib: int = 150
+    rapid_5min_mib: int = 300
     rising_high_mib: int = 2300
     absolute_mib: int = 2500
     cooldown_seconds: int = 60
@@ -117,6 +119,8 @@ class Runtime:
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hass-profiler-capture")
         self.monitor: threading.Thread | None = None
         self.last_status_write = 0.0
+        self.next_housekeeping = 0.0
+        self.housekeeping = {"status": "pending"}
         self._restore()
 
     def _restore(self):
@@ -159,7 +163,8 @@ class Runtime:
                 "recording": self.detector.journal.active is not None,
                 "buffer_samples": len(self.detector.ring),
                 "profiling": "automatic" if self.settings.automatic_memory_profiling and self.storage_ok else "manual_or_disabled",
-                "profile_last": dict(self.last), "storage_ok": self.storage_ok}
+                "profile_last": dict(self.last), "storage_ok": self.storage_ok,
+                "housekeeping": dict(self.housekeeping)}
 
     def status(self) -> dict:
         with self.lock:
@@ -182,6 +187,31 @@ class Runtime:
             self.monitor = threading.Thread(target=self._monitor, name="hass-profiler-monitor", daemon=True)
             self.monitor.start()
 
+    def _housekeep_locked(self):
+        """Run due maintenance without touching a profile being written."""
+        if time.monotonic() < self.next_housekeeping:
+            return
+        if self.active is not None and not self.active.done():
+            return
+        now = time.time()
+        try:
+            if not self.detector.journal.prune(now):
+                raise ValueError("incident retention limit could not be enforced")
+            result = profiler.prune_reports(self.directory, now)
+            result["removed_temporaries"] = profiler.prune_orphan_temporaries(self.directory)
+            journals = self.detector.journal.files()
+            self.housekeeping = {"status": "complete", "last_run_at": now,
+                                 "incident_count": len(journals),
+                                 "incident_bytes": sum(path.stat().st_size for path in journals),
+                                 **result}
+            self.next_housekeeping = time.monotonic() + HOUSEKEEP_INTERVAL
+        except (OSError, ValueError, RuntimeError):
+            self.storage_ok = False
+            self.housekeeping = {"status": "failed", "last_run_at": now}
+            self.next_housekeeping = time.monotonic() + HOUSEKEEP_RETRY
+            LOG.warning("Diagnostic housekeeping failed; new profiles disabled until reload")
+        self._write_status_locked(force=True)
+
     def _monitor(self):
         while not self.stopping.is_set():
             try:
@@ -195,6 +225,9 @@ class Runtime:
                     except (OSError, ValueError, RuntimeError):
                         self.storage_ok = False
                 LOG.warning("Native monitoring sample or journal unavailable")
+            with self.lock:
+                if not self.stopping.is_set():
+                    self._housekeep_locked()
             self.stopping.wait(INTERVAL)
 
     def observe(self, sample: Sample, now: float) -> Future | None:

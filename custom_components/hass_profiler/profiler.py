@@ -11,7 +11,7 @@ import tracemalloc
 from .telemetry import memory_headroom
 
 CAPTURE_LOCK = threading.Lock()
-PROFILE_VERSION = "0.3.0"
+PROFILE_VERSION = "0.3.1"
 MIB = 1024 * 1024
 MAX_TRACER_BYTES = 48 * MIB
 MAX_TRACED_BYTES = 128 * MIB
@@ -19,6 +19,10 @@ MAX_CENSUS_SECONDS = 4.0
 MAX_CENSUS_OBJECTS = 4000000
 MAX_REPORT_BYTES = 65536
 MAX_PROFILES = 64
+REPORT_RETENTION = 30 * 86400
+MAX_PROFILE_TOTAL = MAX_PROFILES * MAX_REPORT_BYTES
+REPORT_NAME = re.compile(r"core-profile-[0-9]{1,24}\.json")
+REPORT_TEMP_NAME = re.compile(r"\.core-profile-[0-9]{1,24}\.json\.tmp")
 
 def integration_owner(filename):
     normalized = filename.replace("\\", "/")
@@ -143,6 +147,42 @@ def summarize_traces(snapshot):
             "integrations": ranking, "integration_count": len(totals),
             "top_sites": top_sites}
 
+def prune_reports(directory, now, preserve=None):
+    """Enforce report age, count and byte limits; only remove owned files."""
+    files = []
+    for path in directory.glob("core-profile-*.json"):
+        if REPORT_NAME.fullmatch(path.name) and not path.is_symlink() and path.is_file():
+            stat = path.stat()
+            files.append((path, stat.st_mtime, stat.st_size))
+    files.sort(key=lambda item: (item[1], item[0].name))
+    count = len(files)
+    total = sum(size for _, _, size in files)
+    removed = 0
+    for path, modified, size in files:
+        if path == preserve:
+            continue
+        if (modified < now - REPORT_RETENTION or count > MAX_PROFILES
+                or total > MAX_PROFILE_TOTAL or size > MAX_REPORT_BYTES):
+            path.unlink()
+            count -= 1
+            total -= size
+            removed += 1
+    if count > MAX_PROFILES or total > MAX_PROFILE_TOTAL:
+        raise ValueError("profile retention limits could not be enforced")
+    return {"report_count": count, "report_bytes": total, "removed_reports": removed}
+
+
+def prune_orphan_temporaries(directory):
+    """Remove abandoned report temporaries only while the runtime is idle."""
+    removed = 0
+    for path in directory.glob(".core-profile-*.json.tmp"):
+        if (REPORT_TEMP_NAME.fullmatch(path.name) and not path.is_symlink()
+                and path.is_file()):
+            path.unlink()
+            removed += 1
+    return removed
+
+
 def persist_report(result, directory):
     directory.mkdir(parents=True, exist_ok=True)
     name = "core-profile-" + str(time.time_ns()) + ".json"
@@ -166,14 +206,7 @@ def persist_report(result, directory):
             os.close(fd)
     finally:
         temp.unlink(missing_ok=True)
-    # Only prune owned reports, never the recorder's incident journals.
-    files = sorted((p for p in directory.glob("core-profile-*.json")
-                    if not p.is_symlink() and p.is_file()), key=lambda p: p.stat().st_mtime)
-    for path in files[:-MAX_PROFILES]:
-        path.unlink()
-    for path in files[-MAX_PROFILES:]:
-        if path != dest and time.time() - path.stat().st_mtime > 30 * 86400:
-            path.unlink(missing_ok=True)
+    prune_reports(directory, time.time(), preserve=dest)
     return result
 
 def capture_profile(seconds, include_census, directory: pathlib.Path, cancel: threading.Event):

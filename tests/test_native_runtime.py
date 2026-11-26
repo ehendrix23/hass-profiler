@@ -1,6 +1,7 @@
 """Tests for native runtime, real CPython tracing, and durable automatic dispatch."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -8,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from custom_components.hass_profiler.detector import Sample
+from custom_components.hass_profiler.detector import Detector, Journal, Sample
 from custom_components.hass_profiler import profiler
 from custom_components.hass_profiler.runtime import Runtime, Settings
 from custom_components.hass_profiler.telemetry import LinuxSampler
@@ -76,6 +77,26 @@ class TestNativeRuntime(unittest.TestCase):
         return Sample(ts, core, available=available, swap=800, swap_free=1100,
                       process_rss=core-100, process_swap=100)
 
+    def test_raised_growth_thresholds_and_unchanged_high_memory_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            det=Detector(Journal(Path(tmp)))
+            self.assertTrue(det.feed(self.sample(100,1800),100))
+            det.feed(self.sample(115,1949),115)
+            self.assertNotIn('rapid_60s',det.flags)
+            det.feed(self.sample(130,1950),130)
+            self.assertIn('rapid_60s',det.flags)
+            self.assertNotIn('rapid_5min',det.flags)
+        with tempfile.TemporaryDirectory() as tmp:
+            det=Detector(Journal(Path(tmp)))
+            for i in range(21):
+                t=100+15*i
+                det.feed(self.sample(t,1800+15*i),t)
+                self.assertNotIn('rapid_60s',det.flags)
+                self.assertEqual('rapid_5min' in det.flags,i==20)
+            det.feed(self.sample(415,2510),415)
+            self.assertIn('absolute_core',det.flags)
+            self.assertIn('rising_high_core',det.flags)
+
     def test_real_automatic_capture_through_native_runtime(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(profiler, "memory_headroom", side_effect=healthy):
             path = Path(tmp)
@@ -84,7 +105,7 @@ class TestNativeRuntime(unittest.TestCase):
             retained = []
             try:
                 runtime.observe(self.sample(now-15), now-15)
-                future = runtime.observe(self.sample(now, 1920), now)
+                future = runtime.observe(self.sample(now, 1960), now)
                 self.assertIsNotNone(future)
                 deadline = time.monotonic() + 2
                 while not profiler.tracemalloc.is_tracing() and time.monotonic() < deadline:
@@ -149,6 +170,92 @@ class TestNativeRuntime(unittest.TestCase):
             self.assertIsNone(first.core_cpu)
             (root/"self"/"status").write_text("VmRSS: 1800000 kB\n")
             self.assertRaises(ValueError,s.read)
+
+    def test_idle_housekeeping_startup_and_periodic_preserves_active(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)
+            old=time.time()-31*86400
+            def aged(name):
+                f=path/name
+                f.write_text('{}\n')
+                os.utime(f,(old,old))
+                return f
+            stale_report=aged('core-profile-1.json')
+            stale_journal=aged('incident-1-1-1.jsonl')
+            unrelated=aged('unrelated.json')
+            orphan=aged('.core-profile-2.json.tmp')
+            current=path/'core-profile-3.json'
+            current.write_text('{}\n')
+            r=Runtime(path, Settings(automatic_memory_profiling=False))
+            try:
+                active=r.detector.journal.open()
+                os.utime(active,(old,old))
+                with patch('custom_components.hass_profiler.runtime.INTERVAL',.02), \
+                     patch('custom_components.hass_profiler.runtime.HOUSEKEEP_INTERVAL',.08), \
+                     patch.object(r.sampler,'read',side_effect=lambda: self.sample(time.time())):
+                    r.start()
+                    deadline=time.monotonic()+2
+                    while stale_report.exists() and time.monotonic()<deadline:
+                        time.sleep(.01)
+                    self.assertFalse(stale_report.exists())
+                    self.assertFalse(stale_journal.exists())
+                    self.assertFalse(orphan.exists())
+                    self.assertTrue(active.exists())
+                    self.assertTrue(unrelated.exists())
+                    self.assertTrue(current.exists())
+                    late=aged('core-profile-4.json')
+                    late_journal=aged('incident-4-1-1.jsonl')
+                    deadline=time.monotonic()+2
+                    while (late.exists() or late_journal.exists()) and time.monotonic()<deadline:
+                        time.sleep(.01)
+                    self.assertFalse(late.exists())
+                    self.assertFalse(late_journal.exists())
+                    self.assertTrue(active.exists())
+                    self.assertTrue(unrelated.exists())
+                    self.assertEqual(r.status()['housekeeping']['status'],'complete')
+            finally:
+                r.stop()
+
+    def test_housekeeping_defers_while_profile_active(self):
+        from concurrent.futures import Future
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)
+            r=Runtime(path, Settings(automatic_memory_profiling=False))
+            old=path/'core-profile-1.json'
+            old.write_text('{}\n')
+            os.utime(old,(time.time()-31*86400,)*2)
+            try:
+                with r.lock:
+                    r.active=Future()
+                    r._housekeep_locked()
+                    self.assertTrue(old.exists())
+                    r.active.set_result({})
+                    r._housekeep_locked()
+                    self.assertFalse(old.exists())
+            finally:
+                r.stop()
+
+    def test_report_retention_count_size_and_owned_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)
+            for i in range(65):
+                f=path/f'core-profile-{i+1}.json'
+                f.write_bytes(b'x'*profiler.MAX_REPORT_BYTES)
+                os.utime(f,(time.time()-100+i,)*2)
+            oversized=path/'core-profile-1000.json'
+            oversized.write_bytes(b'x'*(profiler.MAX_REPORT_BYTES+1))
+            unrelated=path/'core-profile-unrelated.json'
+            unrelated.write_text('keep')
+            linked=path/'core-profile-1001.json'
+            linked.symlink_to(unrelated)
+            result=profiler.prune_reports(path,time.time())
+            self.assertLessEqual(result['report_count'],64)
+            self.assertLessEqual(result['report_bytes'],4*1024*1024)
+            self.assertFalse(oversized.exists())
+            self.assertFalse((path/'core-profile-1.json').exists())
+            self.assertTrue((path/'core-profile-65.json').exists())
+            self.assertTrue(linked.is_symlink())
+            self.assertEqual(unrelated.read_text(),'keep')
 
 
 if __name__ == "__main__":

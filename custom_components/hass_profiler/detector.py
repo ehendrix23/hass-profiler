@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, fields
 import json
 import math
 import os
+import re
 from pathlib import Path
 import time
 from typing import Callable
@@ -18,6 +19,7 @@ MAX_FILE = 1024 * 1024
 MAX_TOTAL = 100 * 1024 * 1024
 RETENTION = 30 * 86400
 MAX_FILES = 256
+INCIDENT_NAME = re.compile(r"incident-[0-9]+-[0-9]+-[0-9]+\.jsonl")
 
 @dataclass(frozen=True, slots=True)
 class Sample:
@@ -56,7 +58,7 @@ class Journal:
 
     def files(self):
         return sorted((p for p in self.directory.glob('incident-*.jsonl')
-                       if p.is_file() and not p.is_symlink()), key=lambda p:p.stat().st_mtime)
+                       if INCIDENT_NAME.fullmatch(p.name) and not p.is_symlink() and p.is_file()), key=lambda p:p.stat().st_mtime)
 
     def prune(self, now, reserve=0):
         paths = self.files()
@@ -104,7 +106,7 @@ class Journal:
 
 class Detector:
     """Bounded state machine. Distinguishes new growth from existing high memory."""
-    def __init__(self, journal: Journal, notify: Callable[[dict],None] | None = None, *, rapid_mib=100, rapid_5min_mib=200, rising_high_mib=2300, absolute_mib=2500):
+    def __init__(self, journal: Journal, notify: Callable[[dict],None] | None = None, *, rapid_mib=150, rapid_5min_mib=300, rising_high_mib=2300, absolute_mib=2500):
         self.journal = journal
         self.rapid_mib = rapid_mib
         self.rapid_5min_mib = rapid_5min_mib
