@@ -1,0 +1,15 @@
+{
+  "domain": "hass_profiler",
+  "name": "HASS Profiler",
+  "codeowners": [
+    "@ehendrix23"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/ehendrix23/hass-profiler",
+  "integration_type": "system",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/ehendrix23/hass-profiler/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.3.0"
+}

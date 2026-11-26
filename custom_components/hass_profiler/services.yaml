@@ -1,0 +1,22 @@
+profile_memory:
+  name: Profile memory
+  description: Capture bounded in-Core Python allocation data and return the saved report. Shared cooldown and headroom protections apply.
+  fields:
+    seconds:
+      name: Duration
+      description: Capture duration, between 5 and 60 seconds.
+      selector:
+        number:
+          min: 5
+          max: 60
+          unit_of_measurement: s
+          mode: box
+    include_census:
+      name: Include existing object census
+      description: Optionally inspect shallow sizes of GC-tracked integration-defined instances before tracing. Only use with ample headroom.
+      default: false
+      selector:
+        boolean:
+status:
+  name: Diagnostic status
+  description: Return native process measurements, freshness, active flags and the last profiling outcome.

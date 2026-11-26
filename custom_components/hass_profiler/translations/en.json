@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure HASS Profiler",
+        "description": "Monitor the current Core process directly. Memory values are RSS plus process swap, not container working set. Automatic captures are limited by independent headroom and rate safeguards. Disable automatic profiling during a migration until the old profiler is stopped.",
+        "data": {
+          "automatic_memory_profiling": "Enable automatic memory profiling",
+          "profile_seconds": "Capture duration (seconds)",
+          "rapid_mib": "Growth threshold in 60 seconds (MiB)",
+          "rapid_5min_mib": "Growth threshold in 5 minutes (MiB)",
+          "rising_high_mib": "Rising high-memory threshold (MiB)",
+          "absolute_mib": "Absolute memory threshold (MiB)",
+          "cooldown_seconds": "Minimum time between attempts (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_thresholds": "Invalid thresholds or capture settings."
+    },
+    "abort": {
+      "already_configured": "HASS Profiler is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HASS Profiler options",
+        "data": {
+          "automatic_memory_profiling": "Enable automatic memory profiling",
+          "profile_seconds": "Capture duration (seconds)",
+          "rapid_mib": "Growth threshold in 60 seconds (MiB)",
+          "rapid_5min_mib": "Growth threshold in 5 minutes (MiB)",
+          "rising_high_mib": "Rising high-memory threshold (MiB)",
+          "absolute_mib": "Absolute memory threshold (MiB)",
+          "cooldown_seconds": "Minimum time between attempts (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_thresholds": "Invalid thresholds or capture settings."
+    }
+  }
+}
